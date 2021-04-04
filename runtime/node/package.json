@@ -19,7 +19,7 @@
     "adaptive-expressions": "4.12.0-rc3",
     "botbuilder": "4.12.0-rc3",
     "botbuilder-ai": "4.12.0-rc3",
-    "botbuilder-dialogs": "4.12.0-rc3",
+    "botbuilder-dialogs": "4.12.0",
     "botbuilder-dialogs-adaptive": "4.12.0-rc3-preview",
     "botbuilder-dialogs-declarative": "4.12.0-rc3-preview",
     "debug": "^4.1.1",
