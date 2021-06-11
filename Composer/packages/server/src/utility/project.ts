@@ -4,9 +4,9 @@
 import * as fs from 'fs';
 
 import { remove } from 'fs-extra';
-import { SchemaMerger } from '@microsoft/bf-dialog/lib/library/schemaMerger';
 import formatMessage from 'format-message';
 import { UserIdentity } from '@botframework-composer/types';
+import { ServerWorker } from '@bfc/server-workers';
 
 import { ExtensionContext } from '../models/extension/extensionContext';
 import { LocationRef } from '../models/bot/interface';
@@ -71,6 +71,20 @@ export async function ejectAndMerge(currentProject: BotProject, jobId: string) {
           log('Eject skipped for project with invalid runtime setting');
         }
       }
+
+      // TO-DO: Remove this once the SDK packages are public on Nuget instad of Myget
+      // Inject a Nuget.config file into the project so that pre-release packages can be resolved.
+      fs.writeFileSync(
+        Path.join(runtimePath, 'Nuget.config'),
+        `<?xml version="1.0" encoding="utf-8"?>
+      <configuration>
+        <packageSources>
+          <add key="nuget.org" value="https://api.nuget.org/v3/index.json" protocolVersion="3" />
+          <add key="BotBuilder.myget.org" value="https://botbuilder.myget.org/F/botbuilder-v4-dotnet-daily/api/v3/index.json" protocolVersion="3" />
+        </packageSources>
+      </configuration>`
+      );
+
       // install all dependencies and build the app
       BackgroundProcessManager.updateProcess(jobId, 202, formatMessage('Building runtime'));
       await runtime.build(runtimePath, currentProject);
@@ -79,18 +93,7 @@ export async function ejectAndMerge(currentProject: BotProject, jobId: string) {
 
       // run the merge command to merge all package dependencies from the template to the bot project
       BackgroundProcessManager.updateProcess(jobId, 202, formatMessage('Merging Packages'));
-      const realMerge = new SchemaMerger(
-        [manifestFile, '!**/imported/**', '!**/generated/**'],
-        Path.join(currentProject.dataDir, 'schemas/sdk'),
-        Path.join(currentProject.dataDir, 'dialogs/imported'),
-        false,
-        false,
-        console.log,
-        console.warn,
-        console.error
-      );
-
-      await realMerge.merge();
+      await ServerWorker.execute('dialogMerge', { manifestFile, currentProjectDataDir: currentProject.dataDir });
     } else {
       log('Schema merge step skipped for project without runtime path');
     }

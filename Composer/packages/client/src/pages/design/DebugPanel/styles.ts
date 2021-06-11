@@ -3,27 +3,30 @@
 
 import { css } from '@emotion/core';
 
-export const DebugPaneHeaderHeight = 36;
-
-export const DebugPaneFooterHeight = 24;
+export const expandedPanelHeaderHeight = 36;
+export const collapsedPaneHeaderHeight = 32;
+export const debugPanelMaxExpandedHeight = 500;
+export const debugPanelDefaultHeight = 300;
+export const debugPanelMinHeight = 200;
 
 export const debugPaneContainerStyle = css`
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 `;
 
 export const debugPaneHeaderStyle = css`
-  height: ${DebugPaneHeaderHeight}px;
   border-top: 1px solid #dfdfdf;
 `;
 
 export const debugPaneContentStyle = css`
-  height: calc(100% - ${DebugPaneHeaderHeight}px);
+  height: calc(100% - ${expandedPanelHeaderHeight}px);
+  overflow-y: hidden;
   overflow-x: auto;
 `;
 
 export const debugPaneFooterStyle = css`
-  height: ${DebugPaneFooterHeight}px;
+  height: ${collapsedPaneHeaderHeight}px;
   border-top: 1px solid #dfdfdf;
 `;
 
@@ -33,7 +36,9 @@ export const debugPaneBarStyle = css`
   background: #faf9f8;
 `;
 
-export const leftBarStyle = css``;
+export const leftBarStyle = css`
+  padding: 0 16px;
+`;
 
 export const rightBarStyle = css`
   display: flex;

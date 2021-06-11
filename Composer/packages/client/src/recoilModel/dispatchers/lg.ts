@@ -56,24 +56,25 @@ const updateLgFiles = (
 
   // adds
   if (adds?.length) {
-    set(lgFileIdsState(projectId), (ids) => ids.concat(adds.map((file) => file.id)));
     adds.forEach((lgFile) => {
       set(lgFileState({ projectId, lgFileId: lgFile.id }), (preFile) =>
         needUpdate ? (needUpdate(preFile, lgFile) ? lgFile : preFile) : lgFile
       );
     });
+    set(lgFileIdsState(projectId), (ids) => ids.concat(adds.map((file) => file.id)));
   }
 };
 
 // sync lg file structure across locales, it take times, computed changes may be expired at next tick.
 export const getRelatedLgFileChanges = async (
   projectId: string,
-  lgFiles: LgFile[],
+  originLgFiles: LgFile[],
   updatedLgFile: LgFile
 ): Promise<LgFile[]> => {
   const { id } = updatedLgFile;
   const dialogId = getBaseName(id);
   const locale = getExtension(id);
+  const lgFiles = originLgFiles.map((file) => (file.id === updatedLgFile.id ? updatedLgFile : file));
   const originLgFile = lgFiles.find((file) => id === file.id);
   const sameIdOtherLocaleFiles = lgFiles.filter((file) => {
     const fileDialogId = getBaseName(file.id);
@@ -475,6 +476,12 @@ export const lgDispatcher = () => {
     }
   );
 
+  const updateAllLgFiles = useRecoilCallback(
+    ({ set }: CallbackInterface) => ({ projectId, lgFiles }: { projectId: string; lgFiles: LgFile[] }) => {
+      set(lgFilesSelectorFamily(projectId), lgFiles);
+    }
+  );
+
   return {
     updateLgFile,
     createLgFile,
@@ -486,5 +493,6 @@ export const lgDispatcher = () => {
     removeLgTemplates,
     copyLgTemplate,
     reparseAllLgFiles,
+    updateAllLgFiles,
   };
 };

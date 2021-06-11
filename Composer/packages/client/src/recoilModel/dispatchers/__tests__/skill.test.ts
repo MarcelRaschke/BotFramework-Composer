@@ -113,7 +113,6 @@ describe('skill dispatcher', () => {
         { recoilState: displaySkillManifestState, initialValue: undefined },
         { recoilState: currentProjectIdState, initialValue: projectId },
         { recoilState: botProjectIdsState, initialValue: [projectId, ...skillIds] },
-        { recoilState: settingsState(projectId), initialValue: {} },
         {
           recoilState: botProjectFileState(projectId),
           initialValue: {
@@ -185,8 +184,8 @@ describe('skill dispatcher', () => {
   it('should update setting.skill on local skills with "Composer Local" chosen as endpoint', async () => {
     await act(async () => {
       const botEndpoints = {};
-      botEndpoints[`${skillIds[0]}`] = 'http://localhost:3978/api/messages';
-      botEndpoints[`${skillIds[1]}`] = 'http://localhost:3979/api/messages';
+      botEndpoints[`${skillIds[0]}`] = { url: 'http://localhost:3978/api/messages', port: 3978 };
+      botEndpoints[`${skillIds[1]}`] = { url: 'http://localhost:3979/api/messages', port: 3979 };
       renderedComponent.current.setters.setBotEndpoints(botEndpoints);
       renderedComponent.current.setters.setTodoSkillData({
         location: '/Users/tester/Desktop/LoadedBotProject/Todo-Skill',

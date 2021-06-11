@@ -23,13 +23,14 @@
   },
   "author": "",
   "nodemonConfig": {
-    "exec": "cross-env TS_NODE_FILES=true node --max-http-header-size=16000 --inspect=9228 -r ts-node/register src/init.ts",
+    "exec": "yarn build && yarn start",
     "watch": [
       "src",
-      "../extension/lib"
+      "../extension/lib",
+      "../../../extensions/**/dist/extension.js"
     ],
-    "ext": "ts",
-    "delay": 2
+    "ext": "ts,js",
+    "delay": 2.5
   },
   "devDependencies": {
     "@babel/plugin-proposal-class-properties": "7.8.3",
@@ -67,20 +68,20 @@
     "ts-node": "^8.4.1"
   },
   "dependencies": {
-    "@azure/msal-node": "^1.0.0-beta.1",
     "@bfc/client": "*",
     "@bfc/extension": "*",
     "@bfc/indexers": "*",
     "@bfc/intellisense-languageserver": "*",
     "@bfc/lg-languageserver": "*",
     "@bfc/lu-languageserver": "*",
+    "@bfc/server-workers": "*",
     "@bfc/shared": "*",
     "@botframework-composer/types": "*",
-    "@microsoft/bf-dialog": "4.11.0-dev.20201025.69cf2b9",
+    "@microsoft/bf-dialog": "4.13.1",
     "@microsoft/bf-dispatcher": "^4.11.0-beta.20201016.393c6b2",
-    "@microsoft/bf-generate-library": "^4.10.0-daily.20210225.217555",
-    "@microsoft/bf-lu": "4.12.0-rc0",
-    "@microsoft/bf-orchestrator": "4.12.0-beta.20210218.668cdac",
+    "@microsoft/bf-generate-library": "^4.14.0-preview.20210605.ff079e5",
+    "@microsoft/bf-lu": "4.14.0-dev.20210602.be805a8",
+    "@microsoft/bf-orchestrator": "4.13.0-rc0",
     "applicationinsights": "^1.8.7",
     "archiver": "^5.0.2",
     "axios": "^0.21.1",
@@ -94,7 +95,7 @@
     "debug": "^4.1.1",
     "dotenv": "^8.1.0",
     "download-npm-package": "^3.1.12",
-    "ejs": "^2.7.1",
+    "ejs": "^3.1.6",
     "express": "^4.16.4",
     "express-serve-static-core": "^0.1.1",
     "express-session": "^1.17.0",
@@ -128,7 +129,7 @@
     "uuid": "^8.3.0",
     "vscode-languageserver": "^5.3.0-next",
     "vscode-ws-jsonrpc": "^0.1.1",
-    "ws": "^5.0.0",
+    "ws": "^7.4.6",
     "yeoman-environment": "^2.10.3"
   },
   "resolutions": {

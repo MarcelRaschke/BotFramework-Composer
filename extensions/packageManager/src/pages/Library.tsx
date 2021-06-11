@@ -24,11 +24,23 @@ import {
   IContextualMenuProps,
   IDropdownOption,
 } from 'office-ui-fabric-react';
-import { render, useHttpClient, useProjectApi, useApplicationApi } from '@bfc/extension-client';
-import { Toolbar, IToolbarItem, LoadingSpinner } from '@bfc/ui-shared';
+import {
+  render,
+  useHttpClient,
+  useProjectApi,
+  useApplicationApi,
+  useTelemetryClient,
+  TelemetryClient,
+} from '@bfc/extension-client';
+import { Toolbar, IToolbarItem, LoadingSpinner, DisplayMarkdownDialog } from '@bfc/ui-shared';
 import ReactMarkdown from 'react-markdown';
 
-import { ContentHeaderStyle, HeaderText } from '../components/styles';
+import {
+  ContentHeaderStyle,
+  HeaderText,
+  packageScrollContainerStyle,
+  tabAndSearchBarStyles,
+} from '../components/styles';
 import { ImportDialog } from '../components/ImportDialog';
 import { LibraryRef, LibraryList, LetterIcon } from '../components/LibraryList';
 import { WorkingModal } from '../components/WorkingModal';
@@ -41,14 +53,26 @@ export interface PackageSourceFeed extends IDropdownOption {
   name: string;
   key: string;
   url: string;
-  searchUrl?: string;
+  type: string;
+  defaultQuery?: {
+    prerelease: boolean;
+    semVerLevel: string;
+    query: string;
+  };
   readonly?: boolean;
 }
 
 const Library: React.FC = () => {
   const [items, setItems] = useState<LibraryRef[]>([]);
-  const { projectId, reloadProject, projectCollection } = useProjectApi();
+  const { projectId, reloadProject, projectCollection: allProjectCollection, stopBot } = useProjectApi();
   const { setApplicationLevelError, navigateTo, confirm } = useApplicationApi();
+  const telemetryClient: TelemetryClient = useTelemetryClient();
+
+  const projectCollection = allProjectCollection.filter((proj) => !proj.isRemote);
+
+  const startingProjectId = allProjectCollection.find((proj) => proj.projectId === projectId).isRemote
+    ? projectCollection[0].projectId // this should always exist, because there's always at least a root bot
+    : projectId;
 
   const [ejectedRuntime, setEjectedRuntime] = useState<boolean>(false);
   const [availableLibraries, updateAvailableLibraries] = useState<LibraryRef[] | undefined>(undefined);
@@ -63,13 +87,14 @@ const Library: React.FC = () => {
   const [selectedItem, setSelectedItem] = useState<LibraryRef>();
   const [selectedItemVersions, setSelectedItemVersions] = useState<string[]>([]);
   const [selectedVersion, setSelectedVersion] = useState<string>('');
-  const [currentProjectId, setCurrentProjectId] = useState<string>(projectId);
+  const [currentProjectId, setCurrentProjectId] = useState<string>(startingProjectId);
   const [working, setWorking] = useState<string>('');
   const [addDialogHidden, setAddDialogHidden] = useState(true);
   const [isModalVisible, setModalVisible] = useState<boolean>(false);
   const [readmeContent, setReadmeContent] = useState<string>('');
   const [versionOptions, setVersionOptions] = useState<IContextualMenuProps | undefined>(undefined);
   const [isUpdate, setIsUpdate] = useState<boolean>(false);
+  const [readmeHidden, setReadmeHidden] = useState<boolean>(true);
   const httpClient = useHttpClient();
   const API_ROOT = '';
   const TABS = {
@@ -84,9 +109,11 @@ const Library: React.FC = () => {
     descriptionLink: formatMessage('Learn more'),
     viewDocumentation: formatMessage('View documentation'),
     installButton: formatMessage('Install'),
+    installToolbarButton: formatMessage('Add a package'),
+
     updateButton: formatMessage('Update to'),
     installed: formatMessage('installed'),
-    importDialogTitle: formatMessage('Install a Package'),
+    importDialogTitle: formatMessage('Add a package'),
     installProgress: formatMessage('Installing package...'),
     uninstallProgress: formatMessage('Removing package...'),
     recentlyUsedCategory: formatMessage('Recently Used'),
@@ -137,15 +164,12 @@ const Library: React.FC = () => {
   };
 
   const getLibraryAPI = () => {
-    const feedUrl = `${API_ROOT}/feed?url=` + encodeURIComponent(feeds.find((f) => f.key == feed).url);
+    const feedUrl = `${API_ROOT}/feed?key=${feed}`;
     return httpClient.get(feedUrl);
   };
 
   const getSearchResults = () => {
-    const feedUrl = feeds.find((f) => f.key == feed).searchUrl
-      ? `${API_ROOT}/feed?url=` +
-        encodeURIComponent(feeds.find((f) => f.key == feed).searchUrl.replace(/\{\{keyword\}\}/g, searchTerm))
-      : `${API_ROOT}/feed?url=` + encodeURIComponent(feeds.find((f) => f.key == feed).url);
+    const feedUrl = `${API_ROOT}/feed?key=${feed}&term=${encodeURIComponent(searchTerm)}`;
     return httpClient.get(feedUrl);
   };
 
@@ -172,7 +196,7 @@ const Library: React.FC = () => {
   };
 
   useEffect(() => {
-    setCurrentProjectId(projectId);
+    setCurrentProjectId(startingProjectId);
     getFeeds().then((feeds) => updateFeeds(feeds.data));
   }, []);
 
@@ -197,12 +221,12 @@ const Library: React.FC = () => {
   }, [feed, feeds, searchTerm]);
 
   useEffect(() => {
-    const settings = projectCollection.find((b) => b.projectId === currentProjectId).setting;
+    const settings = projectCollection.find((b) => b.projectId === currentProjectId)?.setting;
     if (settings?.runtime && settings.runtime.customRuntime === true && settings.runtime.path) {
       setEjectedRuntime(true);
       // detect programming language.
       // should one day be a dynamic property of the runtime or at least stored in the settings?
-      if (settings.runtime.key === 'node-azurewebapp') {
+      if (settings.runtime.key === 'node-azurewebapp' || settings.runtime.key.startsWith('adaptive-runtime-js')) {
         setRuntimeLanguage('js');
       } else {
         setRuntimeLanguage('c#');
@@ -319,7 +343,7 @@ const Library: React.FC = () => {
   const toolbarItems: IToolbarItem[] = [
     {
       type: 'action',
-      text: strings.installButton,
+      text: strings.installToolbarButton,
       buttonProps: {
         iconProps: {
           iconName: 'Add',
@@ -367,24 +391,45 @@ const Library: React.FC = () => {
 
   const importComponent = async (packageName, version, isUpdating, source) => {
     try {
+      stopBot(currentProjectId);
       const results = await installComponentAPI(currentProjectId, packageName, version, isUpdating, source);
 
       // check to see if there was a conflict that requires confirmation
       if (results.data.success === false) {
+        telemetryClient.track('PackageInstallConflictFound', {
+          package: packageName,
+          version: version,
+          isUpdate: isUpdating,
+        });
+
         const title = strings.conflictConfirmationTitle;
         const msg = strings.conflictConfirmationPrompt;
         if (await confirm(title, msg)) {
+          telemetryClient.track('PackageInstallConflictResolved', {
+            package: packageName,
+            version: version,
+            isUpdate: isUpdating,
+          });
           await installComponentAPI(currentProjectId, packageName, version, true, source);
         }
       } else {
+        telemetryClient.track('PackageInstalled', { package: packageName, version: version, isUpdate: isUpdating });
         setWorking('');
-
         updateInstalledComponents(results.data.components);
 
-        // reload modified content
+        // find newly installed item
+        // and pop up the readme if one exists.
+        const newItem = results.data.components.find((i) => i.name === packageName);
+        if (newItem?.readme) {
+          setSelectedItem(newItem);
+          setReadmeHidden(false);
+        }
+
         await reloadProject();
       }
     } catch (err) {
+      telemetryClient.track('PackageInstallFailed', { package: packageName, version: version, isUpdate: isUpdating });
+
       console.error(err);
       setApplicationLevelError({
         status: err.response.status,
@@ -412,11 +457,11 @@ const Library: React.FC = () => {
       updateAvailableLibraries(undefined);
       setLoading(true);
       if (searchTerm) {
+        telemetryClient.track('PackageSearch', { term: searchTerm });
+
         const response = await getSearchResults();
-        // if we are searching, but there is not a searchUrl, apply a local filter
-        if (!feeds.find((f) => f.key === feed)?.searchUrl) {
-          response.data.available = response.data.available.filter(applySearchTerm);
-        }
+        // if we are searching, apply a local filter
+        response.data.available = response.data.available.filter(applySearchTerm);
         updateAvailableLibraries(response.data.available);
         setRecentlyUsed(response.data.recentlyUsed);
       } else {
@@ -470,9 +515,12 @@ const Library: React.FC = () => {
         closeDialog();
         setWorking(strings.uninstallProgress);
         try {
+          stopBot(currentProjectId);
           const results = await uninstallComponentAPI(currentProjectId, selectedItem.name);
 
           if (results.data.success) {
+            telemetryClient.track('PackageUninstalled', { package: selectedItem.name });
+
             updateInstalledComponents(results.data.components);
           } else {
             throw new Error(results.data.message);
@@ -481,11 +529,17 @@ const Library: React.FC = () => {
           // reload modified content
           await reloadProject();
         } catch (err) {
-          setApplicationLevelError({
-            status: err.response.status,
-            message: err.response && err.response.data.message ? err.response.data.message : err,
-            summary: strings.importError,
-          });
+          telemetryClient.track('PackageUninstallFailed', { package: selectedItem.name });
+
+          if (err.response) {
+            setApplicationLevelError({
+              status: err.response.status,
+              message: err.response && err.response.data.message ? err.response.data.message : err,
+              summary: strings.importError,
+            });
+          } else {
+            setApplicationLevelError(err);
+          }
         }
         setWorking('');
       }
@@ -513,10 +567,9 @@ const Library: React.FC = () => {
     navigateTo(`/bot/${currentProjectId}/botProjectsSettings/#runtimeSettings`);
   };
 
-  const updateFeed = async (key: string, updatedItem: PackageSourceFeed) => {
+  const updateFeed = async (feeds: PackageSourceFeed[]) => {
     const response = await httpClient.post(`${API_ROOT}/feeds`, {
-      key: key,
-      updatedItem: updatedItem,
+      feeds,
     });
 
     // update the list of feeds in the component state
@@ -532,7 +585,7 @@ const Library: React.FC = () => {
         }}
         hidden={addDialogHidden}
         minWidth={450}
-        modalProps={{ isBlocking: true }}
+        modalProps={{ isBlocking: true, isClickableOutsideFocusTrap: true }}
         onDismiss={closeDialog}
       >
         <ImportDialog closeDialog={closeDialog} doImport={importFromWeb} />
@@ -544,6 +597,16 @@ const Library: React.FC = () => {
         hidden={!isModalVisible}
         onUpdateFeed={updateFeed}
       />
+      {selectedItem && (
+        <DisplayMarkdownDialog
+          content={selectedItem?.readme}
+          hidden={readmeHidden}
+          title={'Project Readme'}
+          onDismiss={() => {
+            setReadmeHidden(true);
+          }}
+        />
+      )}
       <Toolbar toolbarItems={toolbarItems} />
       <div css={ContentHeaderStyle}>
         <h1 css={HeaderText}>{strings.title}</h1>
@@ -554,7 +617,7 @@ const Library: React.FC = () => {
           </Link>
         </p>
       </div>
-      <Stack horizontal verticalFill styles={{ root: { borderTop: '1px solid #CCC' } }}>
+      <Stack horizontal verticalFill styles={packageScrollContainerStyle}>
         {projectCollection && projectCollection.length > 1 && (
           <Stack.Item styles={{ root: { width: '175px', borderRight: '1px solid #CCC' } }}>
             <ProjectList
@@ -564,7 +627,7 @@ const Library: React.FC = () => {
             />
           </Stack.Item>
         )}
-        <Stack.Item align="stretch" styles={{ root: { flexGrow: 1, overflow: 'auto', maxHeight: '100%' } }}>
+        <Stack.Item align="stretch" styles={{ root: { flexGrow: 1, overflowX: 'hidden', maxHeight: '100%' } }}>
           {!ejectedRuntime && (
             <MessageBar
               actions={
@@ -583,7 +646,7 @@ const Library: React.FC = () => {
            *  This is the top nav that includes the tabs and search bar
            ****************************************************************************/}
 
-          <Stack horizontal styles={{ root: { paddingLeft: '12px', paddingRight: '20px' } }}>
+          <Stack horizontal styles={tabAndSearchBarStyles}>
             <Stack.Item align="stretch">
               <Pivot aria-label="Library Views" onLinkClick={(item: PivotItem) => setCurrentTab(item.props.itemKey)}>
                 <PivotItem headerText={strings.browseHeader} itemKey={TABS.BROWSE} />
@@ -594,6 +657,7 @@ const Library: React.FC = () => {
               <Stack horizontal horizontalAlign="end" tokens={{ childrenGap: 10 }}>
                 <Stack.Item>
                   <Dropdown
+                    ariaLabel={formatMessage('Feeds')}
                     hidden={currentTab !== TABS.BROWSE}
                     options={feeds}
                     placeholder="Format"
@@ -696,7 +760,7 @@ const Library: React.FC = () => {
               width: '400px',
               padding: '10px 20px',
               borderLeft: '1px solid #CCC',
-              overflow: 'auto',
+              overflowX: 'auto',
               maxHeight: '100%',
             },
           }}
@@ -705,8 +769,8 @@ const Library: React.FC = () => {
             <Fragment>
               <Stack horizontal tokens={{ childrenGap: 10 }}>
                 <Stack.Item align="center" grow={0} styles={{ root: { width: 32 } }}>
-                  {selectedItem.icon ? (
-                    <img alt="icon" height="32" src={selectedItem.icon} width="32" />
+                  {selectedItem.iconUrl ? (
+                    <img alt="icon" height="32" src={selectedItem.iconUrl} width="32" />
                   ) : (
                     <LetterIcon letter={selectedItem.name[0]} />
                   )}
@@ -799,6 +863,16 @@ const Library: React.FC = () => {
                 </p>
               )}
 
+              {selectedItem.readme && (
+                <DefaultButton
+                  styles={{ root: { marginRight: 20 } }}
+                  onClick={() => {
+                    setReadmeHidden(false);
+                  }}
+                >
+                  {formatMessage('View readme')}
+                </DefaultButton>
+              )}
               {isInstalled(selectedItem) && <DefaultButton onClick={removeComponent}>Uninstall</DefaultButton>}
             </Fragment>
           ) : (

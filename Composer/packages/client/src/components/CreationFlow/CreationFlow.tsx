@@ -1,15 +1,14 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// TODO: Remove path module
 import Path from 'path';
 
 import React, { useEffect, useRef, Fragment } from 'react';
 import { RouteComponentProps, Router, navigate } from '@reach/router';
 import { useRecoilValue } from 'recoil';
-import { csharpFeedKey } from '@bfc/shared';
+import { BotTemplate } from '@bfc/shared';
 
-import { CreationFlowStatus, feedDictionary } from '../../constants';
+import { CreationFlowStatus, firstPartyTemplateFeed } from '../../constants';
 import {
   dispatcherState,
   creationFlowStatusState,
@@ -17,16 +16,16 @@ import {
   focusedStorageFolderState,
   currentProjectIdState,
   userSettingsState,
-  featureFlagsState,
   templateProjectsState,
 } from '../../recoilModel';
+import { localBotsDataSelector } from '../../recoilModel/selectors/project';
 import Home from '../../pages/home/Home';
 import { useProjectIdCache } from '../../utils/hooks';
 import { ImportModal } from '../ImportModal/ImportModal';
 import TelemetryClient from '../../telemetry/TelemetryClient';
 
-import { CreateOptions } from './CreateOptions';
 import { OpenProject } from './OpenProject';
+import { CreateOptions } from './CreateOptions';
 import DefineConversation from './DefineConversation';
 
 type CreationFlowProps = RouteComponentProps<{}>;
@@ -34,8 +33,6 @@ type CreationFlowProps = RouteComponentProps<{}>;
 const CreationFlow: React.FC<CreationFlowProps> = () => {
   const {
     fetchTemplates,
-    fetchTemplatesV2,
-    fetchRecentProjects,
     fetchStorages,
     fetchFolderItemsByPath,
     setCreationFlowStatus,
@@ -43,24 +40,29 @@ const CreationFlow: React.FC<CreationFlowProps> = () => {
     updateCurrentPathForStorage,
     updateFolder,
     saveTemplateId,
+    fetchRecentProjects,
+    fetchFeed,
     openProject,
-    createNewBot,
     saveProjectAs,
+    migrateProjectTo,
     fetchProjectById,
-    createNewBotV2,
+    createNewBot,
+    fetchReadMe,
   } = useRecoilValue(dispatcherState);
 
   const templateProjects = useRecoilValue(templateProjectsState);
-  const featureFlags = useRecoilValue(featureFlagsState);
   const creationFlowStatus = useRecoilValue(creationFlowStatusState);
   const projectId = useRecoilValue(currentProjectIdState);
   const storages = useRecoilValue(storagesState);
+  const botProjects = useRecoilValue(localBotsDataSelector);
+  const botProject = botProjects.find((b) => b.projectId === projectId);
   const focusedStorageFolder = useRecoilValue(focusedStorageFolderState);
   const { appLocale } = useRecoilValue(userSettingsState);
   const cachedProjectId = useProjectIdCache();
   const currentStorageIndex = useRef(0);
   const storage = storages[currentStorageIndex.current];
   const currentStorageId = storage ? storage.id : 'default';
+
   useEffect(() => {
     if (storages?.length) {
       const storageId = storage.id;
@@ -73,12 +75,14 @@ const CreationFlow: React.FC<CreationFlowProps> = () => {
   const fetchResources = async () => {
     // fetchProject use `gotoSnapshot` which will wipe out all state value.
     // so here make those methods call in sequence.
+
     if (!projectId && cachedProjectId) {
       await fetchProjectById(cachedProjectId);
     }
     await fetchStorages();
+    await fetchTemplates([firstPartyTemplateFeed]);
+    fetchFeed();
     fetchRecentProjects();
-    featureFlags.NEW_CREATION_FLOW?.enabled ? fetchTemplatesV2([feedDictionary[csharpFeedKey]]) : fetchTemplates();
   };
 
   useEffect(() => {
@@ -100,38 +104,67 @@ const CreationFlow: React.FC<CreationFlowProps> = () => {
     navigate(`/home`);
   };
 
-  const openBot = async (botFolder) => {
-    setCreationFlowStatus(CreationFlowStatus.CLOSE);
-    await openProject(botFolder, 'default', true, (projectId) => {
-      TelemetryClient.track('BotProjectOpened', { method: 'toolbar', projectId });
-    });
+  const handleJumpToOpenModal = (search) => {
+    setCreationFlowStatus(CreationFlowStatus.OPEN);
+    navigate(`./open${search}`);
   };
 
-  const handleCreateNew = async (formData, templateId: string) => {
+  const openBot = async (formData) => {
+    setCreationFlowStatus(CreationFlowStatus.CLOSE);
+    await openProject(
+      formData.path,
+      'default',
+      true,
+      { profile: formData.profile, source: formData.source, alias: formData.alias },
+      (projectId) => {
+        TelemetryClient.track('BotProjectOpened', { method: 'toolbar', projectId });
+      }
+    );
+  };
+
+  const handleCreateNew = async (formData, templateId: string, qnaKbUrls?: string[]) => {
+    const templateVersion = templateProjects.find((template: BotTemplate) => {
+      return template.id == templateId;
+    })?.package?.packageVersion;
     const newBotData = {
       templateId: templateId || '',
+      templateVersion: templateVersion || '',
       name: formData.name,
       description: formData.description,
       location: formData.location,
       schemaUrl: formData.schemaUrl,
+      runtimeType: formData.runtimeType,
+      runtimeLanguage: formData.runtimeLanguage,
       appLocale,
-      templateDir: formData.templateDir,
-      eTag: formData.eTag,
-      urlSuffix: formData.urlSuffix,
-      alias: formData.alias,
-      preserveRoot: formData.preserveRoot,
-      profile: formData.profile,
-      source: formData.source,
+      qnaKbUrls,
+      templateDir: formData?.pvaData?.templateDir,
+      eTag: formData?.pvaData?.eTag,
+      urlSuffix: formData?.pvaData?.urlSuffix,
+      preserveRoot: formData?.pvaData?.preserveRoot,
+      alias: formData?.alias,
+      profile: formData?.profile,
+      source: formData?.source,
     };
-    if (templateId === 'conversationalcore') {
-      createNewBotV2(newBotData);
-    } else {
-      createNewBot(newBotData);
-    }
+    TelemetryClient.track('CreateNewBotProjectStarted', { template: templateId });
+
+    createNewBot(newBotData);
   };
 
   const handleSaveAs = (formData) => {
     saveProjectAs(projectId, formData.name, formData.description, formData.location);
+  };
+
+  const handleMigrate = (formData) => {
+    handleDismiss();
+    setCreationFlowStatus(CreationFlowStatus.MIGRATE);
+    migrateProjectTo(
+      projectId,
+      formData.name,
+      formData.description,
+      formData.location,
+      formData.runtimeLanguage,
+      formData.runtimeType
+    );
   };
 
   const handleSubmit = async (formData, templateId: string) => {
@@ -140,16 +173,21 @@ const CreationFlow: React.FC<CreationFlowProps> = () => {
       case CreationFlowStatus.SAVEAS:
         handleSaveAs(formData);
         break;
-
+      case CreationFlowStatus.MIGRATE:
+        handleMigrate(formData);
+        break;
       default:
         saveTemplateId(templateId);
         await handleCreateNew(formData, templateId);
     }
   };
 
-  const handleCreateNext = async (data: string) => {
+  const handleCreateNext = async (templateName: string, runtimeLanguage: string, urlData?: string) => {
     setCreationFlowStatus(CreationFlowStatus.NEW_FROM_TEMPLATE);
-    navigate(`./create/${data}`);
+    const navString = urlData
+      ? `./create/${runtimeLanguage}/${encodeURIComponent(templateName)}${urlData}`
+      : `./create/${runtimeLanguage}/${encodeURIComponent(templateName)}`;
+    navigate(navString);
   };
 
   return (
@@ -159,13 +197,38 @@ const CreationFlow: React.FC<CreationFlowProps> = () => {
         <DefineConversation
           createFolder={createFolder}
           focusedStorageFolder={focusedStorageFolder}
+          path="create/:runtimeLanguage/:templateId"
+          updateFolder={updateFolder}
+          onCurrentPathUpdate={updateCurrentPath}
+          onDismiss={() => {
+            TelemetryClient.track('CreationCancelled');
+            handleDismiss();
+          }}
+          onSubmit={handleSubmit}
+        />
+        <DefineConversation
+          createFolder={createFolder}
+          focusedStorageFolder={focusedStorageFolder}
           path="create/:templateId"
           updateFolder={updateFolder}
           onCurrentPathUpdate={updateCurrentPath}
-          onDismiss={handleDismiss}
+          onDismiss={() => {
+            TelemetryClient.track('CreationCancelled');
+            handleDismiss();
+          }}
           onSubmit={handleSubmit}
         />
-        <CreateOptions path="create" templates={templateProjects} onDismiss={handleDismiss} onNext={handleCreateNext} />
+        <CreateOptions
+          fetchReadMe={fetchReadMe}
+          path="create"
+          templates={templateProjects}
+          onDismiss={() => {
+            TelemetryClient.track('CreationCancelled');
+            handleDismiss();
+          }}
+          onJumpToOpenModal={handleJumpToOpenModal}
+          onNext={handleCreateNext}
+        />
         <DefineConversation
           createFolder={createFolder}
           focusedStorageFolder={focusedStorageFolder}
@@ -181,6 +244,16 @@ const CreationFlow: React.FC<CreationFlowProps> = () => {
           onCurrentPathUpdate={updateCurrentPath}
           onDismiss={handleDismiss}
           onOpen={openBot}
+        />
+        <DefineConversation
+          createFolder={createFolder}
+          focusedStorageFolder={focusedStorageFolder}
+          path="migrate/:projectId"
+          templateId={botProject?.name || 'migrated_project'} // templateId is used for default project name
+          updateFolder={updateFolder}
+          onCurrentPathUpdate={updateCurrentPath}
+          onDismiss={handleDismiss}
+          onSubmit={handleMigrate}
         />
         <ImportModal path="import" />
       </Router>

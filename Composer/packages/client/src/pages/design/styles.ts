@@ -18,6 +18,7 @@ export const contentWrapper = css`
   flex-direction: column;
   flex-grow: 1;
   height: 100%;
+  position: relative;
   label: DesignPageContent;
 `;
 
@@ -61,14 +62,14 @@ export const assetTree = css`
 `;
 /*******/
 
-export const editorContainer = css`
+export const splitPaneContainer = css`
   display: flex;
   flex-direction: column;
   height: 0;
   flex-grow: 1;
 `;
 
-export const editorWrapper = css`
+export const splitPaneWrapper = css`
   display: flex;
   flex-direction: row;
   flex-grow: 1;
@@ -102,9 +103,19 @@ export const formEditor = css`
   min-width: 300px;
 `;
 
+export const visualPanelHeaderContainer = css`
+  display: flex;
+  align-items: center;
+  height: 65px;
+`;
+
+export const visualPanelHeaderShowCodeButton = css`
+  padding: 10px;
+  width: fit-content;
+`;
+
 export const breadcrumbClass = mergeStyleSets({
   root: {
-    width: '500px',
     margin: '0',
     padding: '10px',
   },
@@ -143,7 +154,7 @@ export const middleTriggerElements = css`
   align-items: center;
   font-size: 18px;
   line-height: 24px;
-  color: #828282;
+  color: #6e6e6e;
 `;
 
 export const triggerButton = css`

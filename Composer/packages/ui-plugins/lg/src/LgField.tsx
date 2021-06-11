@@ -213,13 +213,20 @@ const LgField: React.FC<FieldProps<string>> = (props) => {
   }, [editorMode, allowResponseEditor, props.onChange, shellApi.telemetryClient]);
 
   const navigateToLgPage = useCallback(
-    (lgFileId: string) => {
+    (lgFileId: string, options?: { templateId?: string; line?: number }) => {
       // eslint-disable-next-line security/detect-non-literal-regexp
       const pattern = new RegExp(`.${locale}`, 'g');
       const fileId = currentDialog.isFormDialog ? lgFileId : lgFileId.replace(pattern, '');
-      const url = currentDialog.isFormDialog
+      let url = currentDialog.isFormDialog
         ? `/bot/${projectId}/language-generation/${currentDialog.id}/item/${fileId}`
         : `/bot/${projectId}/language-generation/${fileId}`;
+
+      if (options?.line) {
+        url = url + `/edit#L=${options.line}`;
+      } else if (options?.templateId) {
+        url = url + `/edit?t=${options.templateId}`;
+      }
+
       shellApi.navigateTo(url);
     },
     [shellApi, projectId, locale]
@@ -249,6 +256,8 @@ const LgField: React.FC<FieldProps<string>> = (props) => {
     [onTemplateChange]
   );
 
+  const popExpandOptions = React.useMemo(() => ({ popExpandTitle: label || formatMessage('Bot response') }), [label]);
+
   return (
     <React.Fragment>
       <Stack horizontal horizontalAlign="space-between" styles={{ root: { marginBottom: 4 } }} verticalAlign="center">
@@ -272,14 +281,13 @@ const LgField: React.FC<FieldProps<string>> = (props) => {
             styles={linkStyles}
             onClick={modeChange}
           >
-            {editorMode === 'codeEditor'
-              ? formatMessage('Switch to response editor')
-              : formatMessage('Switch to code editor')}
+            {editorMode === 'codeEditor' ? formatMessage('Show response editor') : formatMessage('Show code')}
           </Link>
         </TooltipHost>
       </Stack>
       <LgEditor
         hidePlaceholder
+        showDirectTemplateLink
         diagnostics={diagnostics}
         editorSettings={userSettings.codeEditor}
         height={225}
@@ -290,6 +298,7 @@ const LgField: React.FC<FieldProps<string>> = (props) => {
         lgTemplates={availableLgTemplates}
         memoryVariables={memoryVariables}
         mode={editorMode}
+        popExpandOptions={popExpandOptions}
         telemetryClient={shellApi.telemetryClient}
         value={template.body}
         onChange={onChange}

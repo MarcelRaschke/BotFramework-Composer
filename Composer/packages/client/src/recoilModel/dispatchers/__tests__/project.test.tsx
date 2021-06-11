@@ -13,6 +13,9 @@ import httpClient from '../../../utils/httpUtil';
 import { projectDispatcher } from '../project';
 import { botProjectFileDispatcher } from '../botProjectFile';
 import { publisherDispatcher } from '../publisher';
+import { triggerDispatcher } from '../trigger';
+import { settingsDispatcher } from '../setting';
+import { dialogsDispatcher } from '../dialogs';
 import { renderRecoilHook } from '../../../../__tests__/testUtils';
 import {
   recentProjectsState,
@@ -24,7 +27,6 @@ import {
   runtimeTemplatesState,
   currentProjectIdState,
   skillManifestsState,
-  luFilesState,
   settingsState,
   botEnvironmentState,
   botDiagnosticsState,
@@ -41,7 +43,7 @@ import {
   botProjectSpaceLoadedState,
   dispatcherState,
 } from '../../atoms';
-import { dialogsSelectorFamily, lgFilesSelectorFamily } from '../../selectors';
+import { dialogsSelectorFamily, lgFilesSelectorFamily, luFilesSelectorFamily } from '../../selectors';
 import { Dispatcher } from '../../dispatchers';
 import { BotStatus } from '../../../constants';
 
@@ -68,12 +70,37 @@ jest.mock('../../parsers/lgWorker', () => {
   return {
     flush: () => new Promise((resolve) => resolve(null)),
     addProject: () => new Promise((resolve) => resolve(null)),
+
+    parseAll: (id, files) =>
+      new Promise((resolve) =>
+        resolve(
+          files.map(({ id, content }) => {
+            const result = require('@bfc/indexers').lgUtil.parse(id, content, files);
+            delete result.parseResult;
+            return result;
+          })
+        )
+      ),
   };
 });
 
 jest.mock('../../parsers/luWorker', () => {
   return {
     flush: () => new Promise((resolve) => resolve(null)),
+    parseAll: (files, luFeatures) =>
+      new Promise((resolve) =>
+        resolve(files.map(({ id, content }) => require('@bfc/indexers').luUtil.parse(id, content, luFeatures)))
+      ),
+  };
+});
+
+jest.mock('../../parsers/qnaWorker', () => {
+  return {
+    flush: () => new Promise((resolve) => resolve(null)),
+    parseAll: (files) =>
+      new Promise((resolve) =>
+        resolve(files.map(({ id, content }) => require('@bfc/indexers').qnaUtil.parse(id, content)))
+      ),
   };
 });
 
@@ -113,7 +140,7 @@ describe('Project dispatcher', () => {
     const location = useRecoilValue(locationState(projectId));
     const botName = useRecoilValue(botDisplayNameState(projectId));
     const skillManifests = useRecoilValue(skillManifestsState(projectId));
-    const luFiles = useRecoilValue(luFilesState(projectId));
+    const luFiles = useRecoilValue(luFilesSelectorFamily(projectId));
     const lgFiles = useRecoilValue(lgFilesSelectorFamily(projectId));
     const settings = useRecoilValue(settingsState(projectId));
     const dialogs = useRecoilValue(dialogsSelectorFamily(projectId));
@@ -183,6 +210,9 @@ describe('Project dispatcher', () => {
             projectDispatcher,
             botProjectFileDispatcher,
             publisherDispatcher,
+            triggerDispatcher,
+            dialogsDispatcher,
+            settingsDispatcher,
           },
         },
       }
@@ -448,36 +478,6 @@ describe('Project dispatcher', () => {
       dispatcher.removeSkillFromBotProject(oneNoteProjectId);
     });
     expect(renderedComponent.current.botStates.oneNoteSync).toBeUndefined();
-  });
-
-  it('should be able to add a new skill to Botproject', async () => {
-    const skillId = projectId;
-    await act(async () => {
-      (httpClient.put as jest.Mock).mockResolvedValueOnce({
-        data: mockProjectResponse,
-      });
-      await dispatcher.openProject('../test/empty-bot', 'default');
-    });
-
-    const newProjectDataClone = cloneDeep(mockProjectResponse);
-    newProjectDataClone.botName = 'new-bot';
-    await act(async () => {
-      (httpClient.post as jest.Mock).mockResolvedValueOnce({
-        data: newProjectDataClone,
-      });
-      await dispatcher.addNewSkillToBotProject({
-        name: 'new-bot',
-        description: '',
-        schemaUrl: '',
-        location: '/Users/tester/Desktop/samples',
-        templateId: 'InterruptionSample',
-        locale: 'us-en',
-      });
-    });
-
-    expect(renderedComponent.current.botStates.newBot).toBeDefined();
-    expect(renderedComponent.current.botStates.newBot.botDisplayName).toBe('new-bot');
-    expect(navigateTo).toHaveBeenLastCalledWith(`/bot/${projectId}/skill/${skillId}/dialogs/emptybot-1`);
   });
 
   it('should be able to open a project and its skills in Bot project file', async (done) => {

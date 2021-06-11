@@ -20,7 +20,7 @@ import {
 import { FileTypes } from '../../constants';
 import { getExtension } from '../../utils/fileUtil';
 
-import { logMessage } from './shared';
+import { logMessage, setError } from './shared';
 
 const projectFiles = ['bot', 'botproj'];
 
@@ -140,24 +140,9 @@ export const storageDispatcher = () => {
     }
   );
 
-  const fetchTemplates = useRecoilCallback<[], Promise<void>>((callbackHelpers: CallbackInterface) => async () => {
+  const fetchTemplates = useRecoilCallback(({ set }: CallbackInterface) => async (feedUrls?: string[]) => {
     try {
-      const response = await httpClient.get(`/assets/projectTemplates`);
-
-      const data = response?.data;
-
-      if (data && Array.isArray(data) && data.length > 0) {
-        callbackHelpers.set(templateProjectsState, data);
-      }
-    } catch (err) {
-      // TODO: Handle exceptions
-      logMessage(callbackHelpers, `Error fetching runtime templates: ${err}`);
-    }
-  });
-
-  const fetchTemplatesV2 = useRecoilCallback(({ set }: CallbackInterface) => async (feedUrls?: string[]) => {
-    try {
-      const response = await httpClient.post(`v2/assets/projectTemplates`, {
+      const response = await httpClient.post(`assets/projectTemplates`, {
         feedUrls: feedUrls,
         getFirstPartyNpm: false,
       });
@@ -197,6 +182,11 @@ export const storageDispatcher = () => {
       set(featureFlagsState, response.data);
     } catch (ex) {
       logMessage(callbackHelpers, `Error fetching feature flag data: ${ex}`);
+
+      if (process.env.NODE_ENV === 'development') {
+        const err = new Error(`Error fetching feature flag data: ${ex.message}`);
+        setError(callbackHelpers, err);
+      }
     }
   });
 
@@ -226,7 +216,6 @@ export const storageDispatcher = () => {
     createFolder,
     updateFolder,
     fetchTemplates,
-    fetchTemplatesV2,
     fetchRuntimeTemplates,
     fetchFeatureFlags,
     toggleFeatureFlag,

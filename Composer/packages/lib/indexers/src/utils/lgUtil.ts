@@ -8,12 +8,28 @@
  */
 
 import { Templates, Template, Diagnostic as LGDiagnostic, ImportResolverDelegate } from 'botbuilder-lg';
-import { LgTemplate, lgImportResolverGenerator, TextFile, Diagnostic, Position, Range, LgFile } from '@bfc/shared';
+import {
+  LgTemplate,
+  lgImportResolverGenerator,
+  TextFile,
+  Diagnostic,
+  Position,
+  Range,
+  LgFile,
+  DiagnosticSeverity,
+  LgTemplateRef,
+} from '@bfc/shared';
 import formatMessage from 'format-message';
 import isEmpty from 'lodash/isEmpty';
+import cloneDeep from 'lodash/cloneDeep';
 import { SourceRange } from 'botbuilder-lg/lib/sourceRange';
 
 import { lgIndexer } from '../lgIndexer';
+import {
+  builtInFunctionErrorMessage,
+  BUILT_IN_FUNCTION_ERROR,
+  checkCustomFunctions,
+} from '../validations/expressionValidation/validation';
 
 import { getFileName } from './help';
 
@@ -69,7 +85,17 @@ export function convertTemplatesToLgFile(id = '', content: string, parseResult: 
     };
   });
 
-  return { id, content, templates, allTemplates, diagnostics, imports, options: parseResult.options, parseResult };
+  return {
+    id,
+    content,
+    templates,
+    allTemplates,
+    diagnostics,
+    imports,
+    options: parseResult.options,
+    parseResult,
+    isContentUnparsed: false,
+  };
 }
 
 export function increaseNameUtilNotExist(templates: LgTemplate[], name: string): string {
@@ -213,11 +239,42 @@ export function removeTemplates(
 ): LgFile {
   const { id } = lgFile;
   let resource = getLgResource(lgFile, importResolver);
-  templateNames.forEach((templateName) => {
+
+  const normalizedLgTemplates = templateNames
+    .map((x) => {
+      const lgTemplateRef = LgTemplateRef.parse(x);
+      return lgTemplateRef ? lgTemplateRef.name : x;
+    })
+    .filter((x) => !!x);
+
+  const generatedLgTemplateNames = getGeneratedLgTemplateNames(lgFile, normalizedLgTemplates);
+
+  [...normalizedLgTemplates, ...generatedLgTemplateNames].forEach((templateName) => {
     resource = resource.deleteTemplate(templateName);
   });
   return convertTemplatesToLgFile(id, resource.toString(), resource);
 }
+
+/**
+ * This util function returns the names of all auto generated templates associated with the templates being removed.
+ * @param file Lg file that contains the templates.
+ * @param toBeRemovedLgTemplateNames Names of Lg templates that are being removed.
+ */
+const getGeneratedLgTemplateNames = (file: LgFile, toBeRemovedLgTemplateNames: string[]) => {
+  const generatedLgTemplateNames: string[] = [];
+  const lgTemplates = file.templates.filter((t) => toBeRemovedLgTemplateNames.includes(t.name) && !!t.properties);
+  for (const lgTemplate of lgTemplates) {
+    // Auto-generated templates in structured responses have the following pattern
+    // [name of the parent template]_text OR [name of the parent template]_speak OR [name of the parent template]_attachment_[random string]
+    const pattern = `${lgTemplate.name}_((text|speak)|(attachment_.+))$`;
+    // eslint-disable-next-line security/detect-non-literal-regexp
+    const regex = new RegExp(`^${pattern}`);
+    const generatedLgTemplates = file.templates.map((t) => t.name).filter((name) => regex.test(name));
+    generatedLgTemplateNames.push(...generatedLgTemplates);
+  }
+
+  return generatedLgTemplateNames;
+};
 
 export function textFromTemplate(template: LgTemplate): string {
   const { name, parameters = [], body } = template;
@@ -268,6 +325,24 @@ export function extractOptionByKey(nameOfKey: string, options: string[]): string
     }
   }
   return result;
+}
+
+export function filterCustomFunctionError(diagnostics: Diagnostic[] = [], customFunctions: string[] = []) {
+  return diagnostics.reduce((result: Diagnostic[], d: Diagnostic) => {
+    //If the custom functions are defined in runtime, use the field from settings to filter
+    if (d.message.endsWith(BUILT_IN_FUNCTION_ERROR)) {
+      const pattern = /'.*'/;
+      const currentFunction = pattern.exec(d.message)?.[0];
+      if (currentFunction && customFunctions.some((item) => checkCustomFunctions(currentFunction, item))) {
+        return result;
+      }
+      d = cloneDeep(d);
+      d.message = builtInFunctionErrorMessage(d.message);
+      d.severity = DiagnosticSeverity.Warning;
+    }
+    result.push(d);
+    return result;
+  }, []);
 }
 
 export function parse(id: string, content: string, lgFiles: TextFile[]): LgFile {

@@ -17,8 +17,9 @@ import { getDialogData } from '../../utils/dialogUtil';
 import { decodeDesignerPathToArrayPath } from '../../utils/convertUtils/designerPathEncoder';
 import { getFocusPath } from '../../utils/navigation';
 import { TreeLink } from '../../components/ProjectTree/types';
+import { useResizeObserver } from '../../hooks/useResizeObserver';
 
-import { breadcrumbClass } from './styles';
+import * as pageStyles from './styles';
 
 type BreadcrumbItem = {
   key: string;
@@ -64,7 +65,7 @@ const getActionName = (action, pluginConfig?: PluginConfig) => {
     detectedActionName = nameFromAction;
   } else {
     const kind: string = action?.$kind as string;
-    const actionNameFromSchema = pluginConfig?.uiSchema?.[kind]?.form?.label as string | (() => string) | undefined;
+    const actionNameFromSchema = pluginConfig?.uiSchema?.[kind]?.form?.label;
     if (typeof actionNameFromSchema === 'string') {
       detectedActionName = actionNameFromSchema;
     } else if (typeof actionNameFromSchema === 'function') {
@@ -91,13 +92,13 @@ const useBreadcrumbs = (projectId: string, pluginConfig?: PluginConfig) => {
   const triggerIndex = parseTriggerId(selected);
   //make sure focusPath always valid
   const focusPath = getFocusPath(selected, focused);
-  const trigger = triggerIndex != null && dialogData.triggers[triggerIndex];
+  const trigger = triggerIndex != null && dialogData?.triggers[triggerIndex];
 
   const initialBreadcrumbArray: Array<BreadcrumbItem> = [];
 
   initialBreadcrumbArray.push({
     key: buildKey(BreadcrumbKeyPrefix.Dialog, dialogId),
-    label: dialogMap[dialogId]?.$designer?.name ?? dialogMap[dialogId]?.$designer?.$designer?.name,
+    label: getFriendlyName(dialogMap[dialogId], true),
     link: {
       projectId: projectId,
       dialogId: dialogId,
@@ -108,7 +109,7 @@ const useBreadcrumbs = (projectId: string, pluginConfig?: PluginConfig) => {
   if (triggerIndex != null && trigger != null) {
     initialBreadcrumbArray.push({
       key: buildKey(BreadcrumbKeyPrefix.Trigger, triggerIndex),
-      label: trigger.$designer?.name || getFriendlyName(trigger),
+      label: getFriendlyName(trigger),
       link: {
         projectId: projectId,
         dialogId: dialogId,
@@ -118,7 +119,7 @@ const useBreadcrumbs = (projectId: string, pluginConfig?: PluginConfig) => {
     });
   }
 
-  // getDialogData returns whatever's at the end of the path, which could be a trigger or an action
+  // getDialogData returns whatever is at the end of the path, which could be a trigger or an action
   const possibleAction = getDialogData(dialogMap, dialogId, focusPath);
 
   if (encodedFocused) {
@@ -139,13 +140,13 @@ const useBreadcrumbs = (projectId: string, pluginConfig?: PluginConfig) => {
 
         switch (prefix) {
           case BreadcrumbKeyPrefix.Dialog:
-            b.label = getFriendlyName(currentDialog.content);
+            b.label = getFriendlyName(currentDialog.content, true);
             break;
           case BreadcrumbKeyPrefix.Trigger:
             b.label = getFriendlyName(get(currentDialog.content, `triggers[${name}]`));
             break;
           case BreadcrumbKeyPrefix.Action:
-            b.label = getActionName(get(currentDialog.content, name));
+            b.label = getActionName(get(currentDialog.content, name), pluginConfig);
             break;
         }
         return b;
@@ -155,10 +156,39 @@ const useBreadcrumbs = (projectId: string, pluginConfig?: PluginConfig) => {
   }, [currentDialog?.content, initialBreadcrumbArray]);
   return breadcrumbArray;
 };
-
+const defaultToggleButtonWidth = 100;
+const spaceBetweenContainers = 6;
 const VisualPanelHeader: React.FC<VisualPanelHeaderProps> = React.memo((props) => {
   const { showCode, projectId, onShowCodeClick, pluginConfig } = props;
+
   const breadcrumbs = useBreadcrumbs(projectId, pluginConfig);
+
+  const toggleButtonContainerRef = React.useRef<HTMLDivElement>(null);
+  const containerRef = React.useRef<HTMLDivElement>(null);
+
+  const [toggleButtonWidth, setToggleButtonWidth] = React.useState(defaultToggleButtonWidth);
+  const [breadcrumbContainerWidth, setBreadcrumbContainerWidth] = React.useState<number | string>(
+    `calc(100% - ${toggleButtonWidth}px)`
+  );
+
+  // Set the width of the toggle button based on its text (locale)
+  React.useEffect(() => {
+    if (toggleButtonContainerRef.current) {
+      const toggleButton = toggleButtonContainerRef.current.querySelector<HTMLButtonElement>('button');
+      if (toggleButton) {
+        const { width } = toggleButton?.getBoundingClientRect();
+        setToggleButtonWidth(width);
+      }
+    }
+  }, []);
+
+  // Observe width changes of the container to re-set the available width for breadcrumb container
+  useResizeObserver<HTMLDivElement>(containerRef.current, (entries) => {
+    if (entries.length) {
+      const { width } = entries[0].contentRect;
+      setBreadcrumbContainerWidth(width - toggleButtonWidth - spaceBetweenContainers);
+    }
+  });
 
   const createBreadcrumbItem: (breadcrumb: BreadcrumbItem) => IBreadcrumbItem = (breadcrumb: BreadcrumbItem) => {
     return {
@@ -171,16 +201,16 @@ const VisualPanelHeader: React.FC<VisualPanelHeaderProps> = React.memo((props) =
   const items = breadcrumbs.map(createBreadcrumbItem);
 
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', height: '65px' }}>
-      <Breadcrumb
-        ariaLabel={formatMessage('Navigation Path')}
-        data-testid="Breadcrumb"
-        items={items}
-        maxDisplayedItems={3}
-        styles={breadcrumbClass}
-        onReduceData={() => undefined}
-      />
-      <div style={{ padding: '10px' }}>
+    <div ref={containerRef} css={pageStyles.visualPanelHeaderContainer}>
+      <div style={{ width: breadcrumbContainerWidth }}>
+        <Breadcrumb
+          ariaLabel={formatMessage('Navigation Path')}
+          data-testid="Breadcrumb"
+          items={items}
+          styles={pageStyles.breadcrumbClass}
+        />
+      </div>
+      <div ref={toggleButtonContainerRef} css={pageStyles.visualPanelHeaderShowCodeButton}>
         <ActionButton onClick={onShowCodeClick}>
           {showCode ? formatMessage('Hide code') : formatMessage('Show code')}
         </ActionButton>

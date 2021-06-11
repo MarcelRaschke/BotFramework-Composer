@@ -4,27 +4,43 @@
 /** @jsx jsx */
 import { jsx } from '@emotion/core';
 import { useState, useEffect, useMemo, Fragment, useRef } from 'react';
-import { RouteComponentProps } from '@reach/router';
+import { navigate, RouteComponentProps } from '@reach/router';
 import formatMessage from 'format-message';
 import { useRecoilValue } from 'recoil';
-import { PublishResult } from '@bfc/shared';
+import { PublishResult, PublishTarget } from '@bfc/shared';
+import querystring from 'query-string';
+import { Pivot, PivotItem } from 'office-ui-fabric-react/lib/Pivot';
+import { Stack } from 'office-ui-fabric-react/lib/Stack';
 
 import { dispatcherState, localBotPublishHistorySelector, localBotsDataSelector } from '../../recoilModel';
 import { AuthDialog } from '../../components/Auth/AuthDialog';
 import { createNotification } from '../../recoilModel/dispatchers/notification';
 import { Notification } from '../../recoilModel/types';
 import { getSensitiveProperties } from '../../recoilModel/dispatchers/utils/project';
-import { armScopes } from '../../constants';
-import { getTokenFromCache, isShowAuthDialog, isGetTokenFromUser } from '../../utils/auth';
+import {
+  getTokenFromCache,
+  isShowAuthDialog,
+  userShouldProvideTokens,
+  setTenantId,
+  getTenantIdFromCache,
+} from '../../utils/auth';
+// import { vaultScopes } from '../../constants';
+import { useLocation } from '../../utils/hooks';
 import { AuthClient } from '../../utils/authClient';
 import TelemetryClient from '../../telemetry/TelemetryClient';
 import { ApiStatus, PublishStatusPollingUpdater, pollingUpdaterList } from '../../utils/publishStatusPollingUpdater';
+import { PublishTargets } from '../botProject/PublishTargets';
 import { navigateTo } from '../../utils/navigation';
 
+import { ProjectList } from './components/projectList/ProjectList';
 import { PublishDialog } from './PublishDialog';
 import { ContentHeaderStyle, HeaderText, ContentStyle, contentEditor } from './styles';
 import { BotStatusList } from './BotStatusList';
-import { getPendingNotificationCardProps, getPublishedNotificationCardProps } from './Notifications';
+import {
+  getPendingNotificationCardProps,
+  getPublishedNotificationCardProps,
+  getSkillPublishedNotificationCardProps,
+} from './Notifications';
 import { PullDialog } from './pullDialog';
 import { PublishToolbar } from './PublishToolbar';
 import { Bot, BotStatus } from './type';
@@ -35,9 +51,15 @@ import {
   deleteNotificationInterval,
 } from './publishPageUtils';
 
+const SKILL_PUBLISH_STATUS = {
+  INITIAL: 'inital',
+  WAITING: 'wait for publish',
+  PUBLISHING: 'publishing',
+  PUBLISHED: 'published',
+  CANCEL: 'cancel',
+};
 const Publish: React.FC<RouteComponentProps<{ projectId: string; targetName?: string }>> = (props) => {
   const { projectId = '' } = props;
-
   const botProjectData = useRecoilValue(localBotsDataSelector);
   const publishHistoryList = useRecoilValue(localBotPublishHistorySelector);
   const {
@@ -50,10 +72,13 @@ const Publish: React.FC<RouteComponentProps<{ projectId: string; targetName?: st
     addNotification,
     deleteNotification,
   } = useRecoilValue(dispatcherState);
+  const { location } = useLocation();
 
   const pendingNotificationRef = useRef<Notification>();
   const showNotificationsRef = useRef<Record<string, boolean>>({});
 
+  const [activeTab, setActiveTab] = useState<string>('publish');
+  const [provisionProject, setProvisionProject] = useState(projectId);
   const [currentBotList, setCurrentBotList] = useState<Bot[]>([]);
   const [publishDialogVisible, setPublishDialogVisiblity] = useState(false);
   const [pullDialogVisible, setPullDialogVisiblity] = useState(false);
@@ -69,7 +94,7 @@ const Publish: React.FC<RouteComponentProps<{ projectId: string; targetName?: st
 
   const botStatusList = useMemo(() => {
     return generateBotStatusList(currentBotList, botPropertyData, publishHistoryList);
-  }, [currentBotList, botPropertyData, publishHistoryList]);
+  }, [currentBotList, botPropertyData, publishHistoryList, botProjectData]);
 
   const isPublishPending = useMemo(() => {
     return Object.values(updaterStatus).some(Boolean);
@@ -82,15 +107,11 @@ const Publish: React.FC<RouteComponentProps<{ projectId: string; targetName?: st
   const canPull = useMemo(() => {
     return selectedBots.some((bot) => {
       const { publishTypes, publishTargets } = botPropertyData[bot.id];
-      const type = publishTypes?.find(
-        (t) => t.name === publishTargets?.find((target) => target.name === bot.publishTarget)?.type
-      );
-      if (type?.features?.pull) {
-        return true;
-      }
-      return false;
+      const botPublishTarget = publishTargets?.find((target) => target.name === bot.publishTarget);
+      const type = publishTypes?.find((t) => t.name === botPublishTarget?.type);
+      return type?.features?.pull;
     });
-  }, [selectedBots]);
+  }, [selectedBots, botPropertyData]);
 
   const canPublish =
     checkedSkillIds.length > 0 && !isPublishPending && selectedBots.some((bot) => Boolean(bot.publishTarget));
@@ -104,6 +125,23 @@ const Publish: React.FC<RouteComponentProps<{ projectId: string; targetName?: st
     pendingNotification && (await deleteNotification(pendingNotification.id));
     pendingNotificationRef.current = undefined;
   };
+
+  const [skillPublishStatus, setSkillPublishStatus] = useState(SKILL_PUBLISH_STATUS.INITIAL);
+  const decoded = props.location?.search ? decodeURIComponent(props.location.search) : '';
+  const { publishTargetName, url } = querystring.parse(decoded);
+  const [skillManifestUrl, setSkillManifestUrl] = useState('');
+
+  useEffect(() => {
+    if (publishTargetName && botStatusList.length > 0 && skillPublishStatus === SKILL_PUBLISH_STATUS.INITIAL) {
+      setSkillPublishStatus(SKILL_PUBLISH_STATUS.WAITING);
+      const currentBotStatus = botStatusList.find((bot) => bot.id === projectId);
+      changePublishTarget(publishTargetName, currentBotStatus);
+      setCheckedSkillIds([projectId]);
+      onPublish();
+      setSkillManifestUrl(url as string);
+      props.location && navigate(props.location?.pathname, { replace: true });
+    }
+  }, [publishTargetName, botStatusList, skillPublishStatus, props.location]);
 
   useEffect(() => {
     if (currentBotList.length < botList.length) {
@@ -167,6 +205,10 @@ const Publish: React.FC<RouteComponentProps<{ projectId: string; targetName?: st
     const updater = pollingUpdaterList.find((i) => i.isSameUpdater(botProjectId, targetName));
     const updatedBot = botList.find((bot) => bot.id === botProjectId);
     if (!updatedBot || !updater) return;
+    if (!apiResponse) {
+      stopUpdater(updater);
+      return;
+    }
     const responseData = apiResponse.data;
 
     if (responseData.status !== ApiStatus.Publishing) {
@@ -175,10 +217,16 @@ const Publish: React.FC<RouteComponentProps<{ projectId: string; targetName?: st
       // Show result notifications
       const displayedNotifications = showNotificationsRef.current;
       if (displayedNotifications[botProjectId]) {
-        const resultNotification = createNotification(
-          getPublishedNotificationCardProps({ ...updatedBot, status: responseData.status })
-        );
+        const notificationCard =
+          skillPublishStatus !== SKILL_PUBLISH_STATUS.INITIAL
+            ? getSkillPublishedNotificationCardProps(
+                { ...updatedBot, status: responseData.status, skillManifestUrls: [] },
+                skillManifestUrl
+              )
+            : getPublishedNotificationCardProps({ ...updatedBot, status: responseData.status, skillManifestUrls: [] });
+        const resultNotification = createNotification(notificationCard);
         addNotification(resultNotification);
+        setSkillPublishStatus(SKILL_PUBLISH_STATUS.INITIAL);
         setTimeout(() => {
           deleteNotification(resultNotification.id);
           showNotificationsRef.current = { ...displayedNotifications, [botProjectId]: false };
@@ -189,7 +237,7 @@ const Publish: React.FC<RouteComponentProps<{ projectId: string; targetName?: st
 
   const updateUpdaterStatus = (payload) => {
     const { botProjectId, targetName, apiResponse } = payload;
-    const pending = apiResponse.data.status === ApiStatus.Publishing;
+    const pending = apiResponse && apiResponse.data.status === ApiStatus.Publishing;
     setUpdaterStatus({
       ...updaterStatus,
       [`${botProjectId}/${targetName}`]: pending,
@@ -208,21 +256,83 @@ const Publish: React.FC<RouteComponentProps<{ projectId: string; targetName?: st
   };
 
   const manageSkillPublishProfile = (skillId: string) => {
-    const url =
-      skillId === projectId
-        ? `/bot/${projectId}/botProjectsSettings/#addNewPublishProfile`
-        : `bot/${projectId}/skill/${skillId}/botProjectsSettings/#addNewPublishProfile`;
-    navigateTo(url);
+    setActiveTab('addNewPublishProfile');
+    setProvisionProject(skillId);
+  };
+
+  // pop out get started if #getstarted is in the URL
+  useEffect(() => {
+    if (location.hash === '#addNewPublishProfile' || location.hash === '#completePublishProfile') {
+      setActiveTab('addNewPublishProfile');
+    }
+  }, [location]);
+
+  const isPublishingToAzure = (target?: PublishTarget) => {
+    return target?.type === 'azurePublish' || target?.type === 'azureFunctionsPublish';
+  };
+
+  const onPublish = () => {
+    if (isShowAuthDialog(false)) {
+      setShowAuthDialog(true);
+    } else {
+      setPublishDialogVisiblity(true);
+    }
+    TelemetryClient.track('ToolbarButtonClicked', { name: 'publishSelectedBots' });
   };
 
   const publish = async (items: BotStatus[]) => {
+    const tenantTokenMap = new Map<string, string>();
     // get token
-    let token = '';
-    if (isGetTokenFromUser()) {
-      token = getTokenFromCache('accessToken');
-    } else {
-      token = await AuthClient.getAccessToken(armScopes);
-    }
+    const getTokenForTarget = async (target?: PublishTarget) => {
+      let token = '';
+      if (target && isPublishingToAzure(target)) {
+        const { tenantId } = JSON.parse(target.configuration);
+
+        if (userShouldProvideTokens()) {
+          token = getTokenFromCache('accessToken');
+        } else if (tenantId) {
+          token = tenantTokenMap.get(tenantId) ?? (await AuthClient.getARMTokenForTenant(tenantId));
+          tenantTokenMap.set(tenantId, token);
+        } else {
+          // old publish profile without tenant id
+          let tenant = getTenantIdFromCache();
+          let tenants;
+          if (!tenant) {
+            try {
+              tenants = await AuthClient.getTenants();
+
+              tenant = tenants?.[0]?.tenantId;
+              setTenantId(tenant);
+
+              token = tenantTokenMap.get(tenant) ?? (await AuthClient.getARMTokenForTenant(tenant));
+            } catch (err) {
+              let notification;
+              if (err?.message.includes('does not exist in tenant') && tenants.length > 1) {
+                notification = createNotification({
+                  type: 'error',
+                  title: formatMessage('Unsupported publishing profile'),
+                  description: formatMessage(
+                    'This publishing profile ({ profileName }) is no longer supported. You are a member of multiple Azure tenants and the profile needs to have a tenant id associated with it. You can either edit the profile by adding the `tenantId` property to its configuration or create a new one.',
+                    { profileName: target.name }
+                  ),
+                });
+              } else {
+                notification = createNotification({
+                  type: 'error',
+                  title: formatMessage('Authentication Error'),
+                  description: formatMessage('There was an error accessing your Azure account: {errorMsg}', {
+                    errorMsg: err.message,
+                  }),
+                });
+              }
+              addNotification(notification);
+            }
+          }
+        }
+      }
+
+      return token;
+    };
 
     setPublishDialogVisiblity(false);
     // notifications
@@ -230,9 +340,15 @@ const Publish: React.FC<RouteComponentProps<{ projectId: string; targetName?: st
       accumulator[item.id] = true;
       return accumulator;
     }, {});
-    const notification = createNotification(getPendingNotificationCardProps(items));
+    const notification = createNotification(
+      getPendingNotificationCardProps(items, skillPublishStatus === SKILL_PUBLISH_STATUS.WAITING)
+    );
     pendingNotificationRef.current = notification;
     addNotification(notification);
+
+    if (skillPublishStatus === SKILL_PUBLISH_STATUS.WAITING) {
+      setSkillPublishStatus(SKILL_PUBLISH_STATUS.PUBLISHING);
+    }
 
     // publish to remote
     for (const bot of items) {
@@ -241,11 +357,12 @@ const Publish: React.FC<RouteComponentProps<{ projectId: string; targetName?: st
       if (!(bot.publishTarget && publishTargets && setting)) {
         return;
       }
-      if (bot.publishTarget && publishTargets) {
-        const selectedTarget = publishTargets.find((target) => target.name === bot.publishTarget);
+      const selectedTarget = publishTargets.find((target) => target.name === bot.publishTarget);
+      if (selectedTarget) {
         const botProjectId = bot.id;
         setting.qna.subscriptionKey && (await setQnASettings(botProjectId, setting.qna.subscriptionKey));
         const sensitiveSettings = getSensitiveProperties(setting);
+        const token = await getTokenForTarget(selectedTarget);
         await publishToTarget(botProjectId, selectedTarget, { comment: bot.comment }, sensitiveSettings, token);
 
         // update the target with a lastPublished date
@@ -327,14 +444,7 @@ const Publish: React.FC<RouteComponentProps<{ projectId: string; targetName?: st
       <PublishToolbar
         canPublish={canPublish}
         canPull={canPull}
-        onPublish={() => {
-          if (isShowAuthDialog(false)) {
-            setShowAuthDialog(true);
-          } else {
-            setPublishDialogVisiblity(true);
-          }
-          TelemetryClient.track('ToolbarButtonClicked', { name: 'publishSelectedBots' });
-        }}
+        onPublish={onPublish}
         onPull={() => {
           setPullDialogVisiblity(true);
           TelemetryClient.track('ToolbarButtonClicked', { name: 'pullFromProfile' });
@@ -343,20 +453,51 @@ const Publish: React.FC<RouteComponentProps<{ projectId: string; targetName?: st
       <div css={ContentHeaderStyle}>
         <h1 css={HeaderText}>{formatMessage('Publish your bots')}</h1>
       </div>
-      <div css={ContentStyle} data-testid="Publish" role="main">
-        <div aria-label={formatMessage('List view')} css={contentEditor} role="region">
-          <BotStatusList
-            botPublishHistoryList={publishHistoryList}
-            botStatusList={botStatusList}
-            checkedIds={checkedSkillIds}
-            disableCheckbox={isPublishPending}
-            onChangePublishTarget={changePublishTarget}
-            onCheck={updateCheckedSkills}
-            onManagePublishProfile={manageSkillPublishProfile}
-            onRollbackClick={onRollbackToVersion}
-          />
-        </div>
-      </div>
+
+      <Pivot
+        selectedKey={activeTab}
+        styles={{ root: { marginLeft: 12 } }}
+        onLinkClick={(link) => {
+          setActiveTab(link?.props?.itemKey || '');
+          if (link?.props.itemKey) {
+            setActiveTab(link.props.itemKey);
+            navigateTo(`/bot/${projectId}/publish/all/#${link.props.itemKey}`);
+          }
+        }}
+      >
+        <PivotItem headerText={formatMessage('Publish')} itemKey={'publish'}>
+          <div css={ContentStyle} data-testid="Publish" role="main">
+            <div aria-label={formatMessage('List view')} css={contentEditor} role="region">
+              <BotStatusList
+                botPublishHistoryList={publishHistoryList}
+                botStatusList={botStatusList}
+                checkedIds={checkedSkillIds}
+                disableCheckbox={isPublishPending}
+                onChangePublishTarget={changePublishTarget}
+                onCheck={updateCheckedSkills}
+                onManagePublishProfile={manageSkillPublishProfile}
+                onRollbackClick={onRollbackToVersion}
+              />
+            </div>
+          </div>
+        </PivotItem>
+        <PivotItem headerText={formatMessage('Publishing profile')} itemKey={'addNewPublishProfile'}>
+          <Stack horizontal verticalFill styles={{ root: { borderTop: '1px solid #CCC' } }}>
+            {botProjectData && botProjectData.length > 1 && (
+              <Stack.Item styles={{ root: { width: '175px', borderRight: '1px solid #CCC' } }}>
+                <ProjectList
+                  defaultSelected={provisionProject}
+                  projectCollection={botProjectData}
+                  onSelect={(link) => setProvisionProject(link.projectId)}
+                />
+              </Stack.Item>
+            )}
+            <Stack.Item align="stretch" styles={{ root: { flexGrow: 1, overflow: 'auto', maxHeight: '100%' } }}>
+              <PublishTargets projectId={provisionProject} />
+            </Stack.Item>
+          </Stack>
+        </PivotItem>
+      </Pivot>
     </Fragment>
   );
 };

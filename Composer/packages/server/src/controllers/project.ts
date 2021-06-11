@@ -12,74 +12,12 @@ import { BotProjectService } from '../services/project';
 import AssetService from '../services/asset';
 import { LocationRef } from '../models/bot/interface';
 import { getSkillManifest } from '../models/bot/skillManager';
+import { getFeedUrl } from '../models/bot/feedManager';
 import StorageService from '../services/storage';
 import settings from '../settings';
-import { getLocationRef, getNewProjRef } from '../utility/project';
 import { BackgroundProcessManager } from '../services/backgroundProcessManager';
-import { TelemetryService } from '../services/telemetry';
 
 import { Path } from './../utility/path';
-
-async function createProject(req: Request, res: Response) {
-  let { templateId } = req.body;
-  const {
-    name,
-    description,
-    storageId,
-    location,
-    schemaUrl,
-    locale,
-    preserveRoot,
-    templateDir,
-    eTag,
-    alias,
-  } = req.body;
-  const user = await ExtensionContext.getUserFromRequest(req);
-  if (templateId === '') {
-    templateId = 'EmptyBot';
-  }
-
-  const locationRef = getLocationRef(location, storageId, name);
-
-  try {
-    // the template was downloaded remotely (via import) and will be used instead of an internal Composer template
-    const createFromRemoteTemplate = !!templateDir;
-
-    await BotProjectService.cleanProject(locationRef);
-    const newProjRef = await getNewProjRef(templateDir, templateId, locationRef, user, locale);
-
-    const id = await BotProjectService.openProject(newProjRef, user);
-    // in the case of a remote template, we need to update the eTag and alias used by the import mechanism
-    BotProjectService.setProjectLocationData(id, { alias, eTag });
-    const currentProject = await BotProjectService.getProjectById(id, user);
-
-    // inject shared content into every new project.  this comes from assets/shared
-    if (!createFromRemoteTemplate) {
-      await AssetService.manager.copyBoilerplate(currentProject.dataDir, currentProject.fileStorage);
-    }
-
-    if (currentProject !== undefined) {
-      await currentProject.updateBotInfo(name, description, preserveRoot);
-      if (schemaUrl && !createFromRemoteTemplate) {
-        await currentProject.saveSchemaToProject(schemaUrl, locationRef.path);
-      }
-      await currentProject.init();
-
-      const project = currentProject.getProject();
-      log('Project created successfully.');
-      res.status(200).json({
-        id,
-        ...project,
-      });
-    }
-    TelemetryService.trackEvent('CreateNewBotProjectCompleted', { template: templateId, status: 200 });
-  } catch (err) {
-    res.status(404).json({
-      message: err instanceof Error ? err.message : err,
-    });
-    TelemetryService.trackEvent('CreateNewBotProjectCompleted', { template: templateId, status: 404 });
-  }
-}
 
 async function getProjectById(req: Request, res: Response) {
   const projectId = req.params.projectId;
@@ -132,6 +70,41 @@ async function getProjectByAlias(req: Request, res: Response) {
   }
 }
 
+async function setProjectAlias(req: Request, res: Response) {
+  const { alias } = req.body;
+  const projectId = req.params.projectId;
+  const user = await ExtensionContext.getUserFromRequest(req);
+  if (!alias) {
+    res.status(400).json({
+      message: 'Parameters not provided, requires "alias" parameter',
+    });
+    return;
+  }
+
+  try {
+    const currentProject = await BotProjectService.getProjectById(projectId, user);
+
+    if (currentProject !== undefined) {
+      try {
+        await BotProjectService.setProjectAlias(projectId, alias);
+        res.status(200).json({ id: currentProject.id, name: currentProject.name, alias: alias });
+      } catch (error) {
+        res.status(400).json({
+          message: error instanceof Error ? error.message : error,
+        });
+      }
+    } else {
+      res.status(404).json({
+        message: `No matching bot project found for projectId ${projectId}`,
+      });
+    }
+  } catch (error) {
+    res.status(500).json({
+      message: error.message,
+    });
+  }
+}
+
 async function removeProject(req: Request, res: Response) {
   const projectId = req.params.projectId;
   if (!projectId) {
@@ -158,7 +131,7 @@ async function removeProject(req: Request, res: Response) {
 async function openProject(req: Request, res: Response) {
   if (!req.body.storageId || !req.body.path) {
     res.status(400).json({
-      message: 'parameters not provided, require stoarge id and path',
+      message: 'parameters not provided, require storage id and path',
     });
     return;
   }
@@ -171,7 +144,7 @@ async function openProject(req: Request, res: Response) {
   };
 
   try {
-    const id = await BotProjectService.openProject(location, user);
+    const id = await BotProjectService.openProject(location, user, req.body.isRootBot);
     const currentProject = await BotProjectService.getProjectById(id, user);
     if (currentProject !== undefined) {
       await currentProject.init();
@@ -195,7 +168,7 @@ async function openProject(req: Request, res: Response) {
 async function saveProjectAs(req: Request, res: Response) {
   if (!req.body.storageId || !req.body.name) {
     res.status(400).json({
-      message: 'parameters not provided, require stoarge id and path',
+      message: 'parameters not provided, require storage id and path',
     });
     return;
   }
@@ -244,6 +217,16 @@ async function getRecentProjects(req: Request, res: Response) {
   return res.status(200).json(projects);
 }
 
+async function getFeed(req: Request, res: Response) {
+  try {
+    const content = await getFeedUrl();
+    res.status(200).json(content);
+  } catch (err) {
+    res.status(404).json({
+      message: err.message,
+    });
+  }
+}
 async function generateProjectId(req: Request, res: Response) {
   try {
     const location = req.query.location;
@@ -301,6 +284,51 @@ async function removeFile(req: Request, res: Response) {
   }
 }
 
+async function updateManifestFile(req: Request, res: Response) {
+  const projectId = req.params.projectId;
+  const user = await ExtensionContext.getUserFromRequest(req);
+  const currentProject = await BotProjectService.getProjectById(projectId, user);
+  if (currentProject !== undefined) {
+    const lastModified = await currentProject.updateManifestLuFile(req.body.name, req.body.content);
+    res.status(200).json({ lastModified: lastModified });
+  } else {
+    res.status(404).json({
+      message: 'No such bot project found',
+    });
+  }
+}
+
+async function createManifestFile(req: Request, res: Response) {
+  const projectId = req.params.projectId;
+  const user = await ExtensionContext.getUserFromRequest(req);
+
+  const currentProject = await BotProjectService.getProjectById(projectId, user);
+  if (currentProject !== undefined) {
+    const { name, content } = req.body;
+
+    //dir = id
+    const file = await currentProject.createManifestLuFile(name, content);
+    res.status(200).json(file);
+  } else {
+    res.status(404).json({
+      message: 'No such bot project found',
+    });
+  }
+}
+
+async function removeManifestFile(req: Request, res: Response) {
+  const projectId = req.params.projectId;
+  const user = await ExtensionContext.getUserFromRequest(req);
+
+  const currentProject = await BotProjectService.getProjectById(projectId, user);
+  if (currentProject !== undefined) {
+    const dialogResources = await currentProject.deleteManifestLuFile(req.params.name);
+    res.status(200).json(dialogResources);
+  } else {
+    res.status(404).json({ error: 'No bot project found' });
+  }
+}
+
 async function getSkill(req: Request, res: Response) {
   const projectId = req.params.projectId;
   const user = await ExtensionContext.getUserFromRequest(req);
@@ -309,7 +337,7 @@ async function getSkill(req: Request, res: Response) {
     const currentProject = await BotProjectService.getProjectById(projectId, user);
     if (currentProject === undefined) {
       res.status(404).json({
-        message: 'No such bot project opened',
+        message: 'No such bot project found',
       });
     }
   }
@@ -346,9 +374,22 @@ async function setQnASettings(req: Request, res: Response) {
       const qnaEndpointKey = await currentProject.updateQnaEndpointKey(req.body.subscriptionKey);
       res.status(200).json(qnaEndpointKey);
     } catch (error) {
-      res.status(400).json({
-        message: error instanceof Error ? error.message : error,
-      });
+      // QNA maker will occasionally fail to do this
+      // instead of failing, we need to tell composer to retry
+      if (
+        error.message ===
+          'Access denied due to invalid subscription key or wrong API endpoint. Make sure to provide a valid key for an active subscription and use a correct regional API endpoint for your resource.' ||
+        error.message ===
+          'No Endpoint keys found. If this is a new service, please wait a minimum of 10 minutes for the runtime to be ready.'
+      ) {
+        res.status(202).json({
+          message: 'Waiting for QnA Maker',
+        });
+      } else {
+        res.status(400).json({
+          message: error instanceof Error ? error.message : error,
+        });
+      }
     }
   } else {
     res.status(404).json({
@@ -369,10 +410,11 @@ async function build(req: Request, res: Response) {
   const currentProject = await BotProjectService.getProjectById(projectId, user);
   if (currentProject !== undefined) {
     try {
-      const { luisConfig, qnaConfig, luFiles, qnaFiles } = req.body;
+      const { luisConfig, qnaConfig, orchestratorConfig, luFiles, qnaFiles } = req.body;
       const files = await currentProject.buildFiles({
         luisConfig,
         qnaConfig,
+        orchestratorConfig,
         luResource: luFiles,
         qnaResource: qnaFiles,
       });
@@ -511,9 +553,17 @@ async function copyTemplateToExistingProject(req: Request, res: Response) {
   }
 }
 
-function createProjectV2(req: Request, res: Response) {
+function createProject(req: Request, res: Response) {
   const jobId = BackgroundProcessManager.startProcess(202, 'create', 'Creating Bot Project');
   BotProjectService.createProjectAsync(req, jobId);
+  res.status(202).json({
+    jobId: jobId,
+  });
+}
+
+function migrateProject(req: Request, res: Response) {
+  const jobId = BackgroundProcessManager.startProcess(202, 'create', 'Migrating Bot Project');
+  BotProjectService.migrateProjectAsync(req, jobId);
   res.status(202).json({
     jobId: jobId,
   });
@@ -546,19 +596,24 @@ export const ProjectController = {
   updateFile,
   createFile,
   removeFile,
+  createManifestFile,
+  updateManifestFile,
+  removeManifestFile,
   getSkill,
   build,
   setQnASettings,
   exportProject,
   saveProjectAs,
   createProject,
-  createProjectV2,
+  migrateProject,
   getAllProjects,
   getRecentProjects,
+  getFeed,
   updateBoilerplate,
   checkBoilerplateVersion,
   generateProjectId,
   getProjectByAlias,
+  setProjectAlias,
   backupProject,
   copyTemplateToExistingProject,
   getVariablesByProjectId,

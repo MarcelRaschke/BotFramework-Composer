@@ -6,6 +6,7 @@ import { EditorDidMount } from '@monaco-editor/react';
 import { FluentTheme, NeutralColors } from '@uifabric/fluent-theme';
 import formatMessage from 'format-message';
 import get from 'lodash/get';
+import omit from 'lodash/omit';
 import { MonacoLanguageClient, MonacoServices } from 'monaco-languageclient';
 import { Icon } from 'office-ui-fabric-react/lib/Icon';
 import { Link } from 'office-ui-fabric-react/lib/Link';
@@ -15,15 +16,17 @@ import React, { useEffect, useState } from 'react';
 import { listen, MessageConnection } from 'vscode-ws-jsonrpc';
 
 import { BaseEditor, OnInit } from '../BaseEditor';
+import { EditorPopExpandDialog } from '../components/EditorPopExpandDialog';
+import { FieldToolbar } from '../components/toolbar/FieldToolbar';
 import { LG_HELP } from '../constants';
+import { useEditorToolbarPopExpandItem } from '../hooks/useEditorToolbarPopExpandItem';
 import { registerLGLanguage } from '../languages';
-import { LgCodeEditorProps } from '../types';
+import { LgCodeEditorProps, ToolbarButtonPayload } from '../types';
 import { computeRequiredEdits } from '../utils/lgUtils';
 import { createLanguageClient, createUrl, createWebSocket, sendRequestWithRetry } from '../utils/lspUtil';
 import { withTooltip } from '../utils/withTooltip';
 
-import { LgEditorToolbar as DefaultLgEditorToolbar } from './LgEditorToolbar';
-import { ToolbarButtonPayload } from './types';
+import { jsLgToolbarMenuClassName } from './constants';
 
 const placeholder = formatMessage(
   `> To learn more about the LG file format, read the documentation at
@@ -60,7 +63,9 @@ const LgTemplateLink = withTooltip(
   Link
 );
 
-const LgEditorToolbar = styled(DefaultLgEditorToolbar)({
+const templateLinkTokens = { childrenGap: 4 };
+
+const EditorToolbar = styled(FieldToolbar)({
   border: `1px solid ${NeutralColors.gray120}`,
   borderBottom: 'none',
 });
@@ -81,20 +86,30 @@ export const LgCodeEditor = (props: LgCodeEditorProps) => {
     quickSuggestions: true,
     wordBasedSuggestions: false,
     folding: true,
+    definitions: true,
     ...props.options,
   };
 
   const {
-    toolbarHidden,
+    toolbarOptions,
     lgOption,
     languageServer,
     onInit: onInitProp,
     memoryVariables,
     lgTemplates,
     telemetryClient,
+    showDirectTemplateLink,
     onNavigateToLgPage,
+    popExpandOptions,
+    onChange,
     ...restProps
   } = props;
+
+  const { toolbarItem, isExpanded, dismiss } = useEditorToolbarPopExpandItem(popExpandOptions, {
+    customClassName: jsLgToolbarMenuClassName,
+  });
+
+  const farItems = React.useMemo(() => (toolbarItem ? [toolbarItem] : []), [toolbarItem]);
 
   const lgServer = languageServer || defaultLGServer;
 
@@ -107,6 +122,10 @@ export const LgCodeEditor = (props: LgCodeEditorProps) => {
   const [editor, setEditor] = useState<any>();
 
   useEffect(() => {
+    if (props.options?.readOnly) {
+      return;
+    }
+
     if (!editor) return;
 
     if (!window.monacoServiceInstance) {
@@ -126,16 +145,34 @@ export const LgCodeEditor = (props: LgCodeEditorProps) => {
             ['botbuilderlg'],
             connection
           );
+
           sendRequestWithRetry(languageClient, 'initializeDocuments', { lgOption, uri });
           const disposable = languageClient.start();
           connection.onClose(() => disposable.dispose());
           window.monacoLGEditorInstance = languageClient;
+
+          languageClient.onReady().then(() =>
+            languageClient.onNotification('GotoDefinition', (result) => {
+              if (lgOption?.projectId) {
+                onNavigateToLgPage?.(result.fileId, { templateId: result.templateId, line: result.line });
+              }
+            })
+          );
         },
       });
     } else {
-      sendRequestWithRetry(window.monacoLGEditorInstance, 'initializeDocuments', { lgOption, uri });
+      if (!props.options?.readOnly) {
+        sendRequestWithRetry(window.monacoLGEditorInstance, 'initializeDocuments', { lgOption, uri });
+      }
+      window.monacoLGEditorInstance.onReady().then(() =>
+        window.monacoLGEditorInstance.onNotification('GotoDefinition', (result) => {
+          if (lgOption?.projectId) {
+            onNavigateToLgPage?.(result.fileId, { templateId: result.templateId, line: result.line });
+          }
+        })
+      );
     }
-  }, [editor]);
+  }, [editor, onNavigateToLgPage]);
 
   const onInit: OnInit = (monaco) => {
     registerLGLanguage(monaco);
@@ -170,37 +207,69 @@ export const LgCodeEditor = (props: LgCodeEditorProps) => {
   );
 
   const navigateToLgPage = React.useCallback(() => {
-    onNavigateToLgPage?.(lgOption?.fileId ?? 'common');
-  }, [onNavigateToLgPage, lgOption?.fileId]);
+    onNavigateToLgPage?.(lgOption?.fileId ?? 'common', { templateId: lgOption?.templateId, line: undefined });
+  }, [onNavigateToLgPage, lgOption]);
+
+  const onExpandedEditorChange = React.useCallback(
+    (newValue: string) => {
+      editor?.getModel()?.setValue(newValue);
+      onChange(newValue);
+    },
+    [editor, onChange]
+  );
+
+  const change = React.useCallback(
+    (newValue: string, isFlush?: boolean) => {
+      // Only invoke callback if it's user edits and not setValue call
+      if (!isFlush) {
+        onChange(newValue);
+      }
+    },
+    [onChange]
+  );
 
   return (
-    <Stack verticalFill>
-      {!toolbarHidden && (
-        <LgEditorToolbar
-          lgTemplates={lgTemplates}
-          properties={memoryVariables}
-          onSelectToolbarMenuItem={selectToolbarMenuItem}
+    <>
+      <Stack verticalFill>
+        {toolbarOptions?.hidden !== true && (
+          <EditorToolbar
+            farItems={farItems}
+            lgTemplates={lgTemplates}
+            properties={memoryVariables}
+            onSelectToolbarMenuItem={selectToolbarMenuItem}
+          />
+        )}
+        <BaseEditor
+          helpURL={LG_HELP}
+          id={editorId}
+          placeholder={placeholder}
+          onChange={change}
+          {...restProps}
+          editorDidMount={editorDidMount}
+          language="botbuilderlg"
+          options={options}
+          theme="lgtheme"
+          onInit={onInit}
+        />
+        {showDirectTemplateLink && onNavigateToLgPage && lgOption && (
+          <Stack horizontal tokens={templateLinkTokens} verticalAlign="center">
+            <Text styles={grayTextStyle}>{formatMessage('Template name: ')}</Text>
+            <LgTemplateLink as="button" styles={linkStyles} onClick={navigateToLgPage}>
+              #{lgOption.templateId}()
+            </LgTemplateLink>
+          </Stack>
+        )}
+      </Stack>
+      {isExpanded && (
+        <EditorPopExpandDialog<LgCodeEditorProps>
+          popExpandOptions={popExpandOptions}
+          {...omit(props, ['popExpandOptions'])}
+          EditorComponent={LgCodeEditor}
+          height={400}
+          onChange={onExpandedEditorChange}
+          onDismiss={dismiss}
         />
       )}
-      <BaseEditor
-        helpURL={LG_HELP}
-        id={editorId}
-        placeholder={placeholder}
-        {...restProps}
-        editorDidMount={editorDidMount}
-        language="botbuilderlg"
-        options={options}
-        theme="lgtheme"
-        onInit={onInit}
-      />
-      {onNavigateToLgPage && lgOption && (
-        <Stack horizontal verticalAlign="center">
-          <Text styles={grayTextStyle}>{formatMessage('Template name: ')}</Text>
-          <LgTemplateLink as="button" styles={linkStyles} onClick={navigateToLgPage}>
-            #{lgOption.templateId}()
-          </LgTemplateLink>
-        </Stack>
-      )}
-    </Stack>
+    </>
   );
 };

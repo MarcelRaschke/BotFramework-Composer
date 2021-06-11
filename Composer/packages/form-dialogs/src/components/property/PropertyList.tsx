@@ -11,6 +11,7 @@ import { Droppable } from 'react-beautiful-dnd';
 
 import { PropertyRequiredKind } from '../../atoms/types';
 import { jsPropertyListClassName } from '../../utils/constants';
+import { HelpTooltip } from '../common/HelpTooltip';
 
 import { PropertyListItem } from './PropertyListItem';
 
@@ -19,14 +20,16 @@ const Root = styled(Stack)({
 });
 
 const List = styled.div(({ isDraggingOver }: { isDraggingOver: boolean }) => ({
-  margin: '24px 0',
+  margin: '0 0 24px 0',
   backgroundColor: isDraggingOver ? NeutralColors.gray40 : 'transparent',
 }));
 
-const Header = styled(Text)({
-  position: 'absolute',
-  left: 24,
-  top: 24,
+const Header = styled(Stack)({
+  height: 56,
+  width: 740,
+});
+
+const HeaderText = styled(Text)({
   color: NeutralColors.gray130,
   fontWeight: 600,
 });
@@ -50,9 +53,9 @@ const InternalPropertyList = React.memo((props: Props) => (
     ) : (
       <EmptyMessage horizontal horizontalAlign="center" verticalAlign="center">
         <Text styles={{ root: { color: NeutralColors.gray80 } }} variant="medium">
-          {formatMessage('There are no {kind} properties.', {
-            kind: props.kind === 'required' ? formatMessage('required') : formatMessage('optional'),
-          })}
+          {props.kind === 'required'
+            ? formatMessage('There are no required properties.')
+            : formatMessage('There are no optional properties.')}
         </Text>
       </EmptyMessage>
     )}
@@ -64,8 +67,20 @@ export const PropertyList = (props: Props) => {
 
   return (
     <Root horizontalAlign="center">
-      <Header>
-        {kind === 'required' ? formatMessage('Required properties') : formatMessage('Optional properties')}
+      <Header horizontal tokens={{ childrenGap: 8 }} verticalAlign="center">
+        <HeaderText>
+          {kind === 'required' ? formatMessage('Required properties') : formatMessage('Optional properties')}
+        </HeaderText>
+        <HelpTooltip
+          helpMessage={
+            kind === 'required'
+              ? formatMessage(
+                  'Required properties are properties that your bot will ask the user to provide. The user must provide values for all required properties.'
+                )
+              : formatMessage('Optional properties are properties the bot accepts if given but does not ask for.')
+          }
+          tooltipId={`${kind}-tooltip`}
+        />
       </Header>
       <Droppable direction="vertical" droppableId={kind}>
         {(provided, { isDraggingOver }) => (
