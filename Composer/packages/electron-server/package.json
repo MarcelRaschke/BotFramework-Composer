@@ -65,7 +65,7 @@
     "crypto": "^1.0.1",
     "debug": "4.1.1",
     "electron-updater": "4.2.5",
-    "fix-path": "^3.0.0",
+    "fix-path": "^4.0.0",
     "format-message": "^6.2.3",
     "format-message-generate-id": "^6.2.3",
     "fs-extra": "^9.0.0",
