@@ -38,7 +38,7 @@
     "office-ui-fabric-react": "^7.88.1",
     "prop-types": "^15.7.2",
     "react-measure": "^2.3.0",
-    "source-map-loader": "^0.2.4"
+    "source-map-loader": "^1.0.0"
   },
   "peerDependencies": {
     "format-message": "^6.2.3",
