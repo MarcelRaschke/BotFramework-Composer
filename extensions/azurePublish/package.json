@@ -97,10 +97,10 @@
     "@types/react-dom": "^16.9.8",
     "@types/request": "2.48.4",
     "@types/request-promise": "4.1.45",
-    "html-webpack-plugin": "^4.3.0",
-    "ts-loader": "^8.0.0",
+    "html-webpack-plugin": "^5.0.0",
+    "ts-loader": "^8.0.14",
     "typescript": "^3.9.6",
-    "webpack": "^4.43.0",
-    "webpack-cli": "^3.3.12"
+    "webpack": "^5.0.0",
+    "webpack-cli": "^4.0.0"
   }
 }
